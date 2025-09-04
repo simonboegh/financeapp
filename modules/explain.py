@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional, List, Dict
+import datetime as dt
 
 @dataclass
 class Metrics:
@@ -103,3 +104,51 @@ def human_explain_price_move(period_label: str, ret_pct: float, market_ret: floa
         reasons.append("ingen enkeltårsag – sandsynligvis generel stemning og nyhedsmix")
     out.append("Sandsynlige forklaringer: " + "; ".join(reasons) + ".")
     return out
+
+# ---------- LLM-forklaring ----------
+def ai_explain_price_move(
+    model_name: str,
+    client,  # OpenAI client
+    ticker: str,
+    period_label: str,
+    ret_pct: float,
+    market_ret: float|None,
+    sector_name: str|None,
+    sector_ret: float|None,
+    volume_ratio: float|None,
+    news_items: List[Dict],
+) -> str:
+    """
+    Skriver en Bente-venlig forklaring med kildehenvisninger, baseret på inputtal + nyheder.
+    news_items forventes som liste af dicts med mindst 'title' og 'link'/'url' og evt. 'providerPublishTime'.
+    """
+    def pick(n, k):  # reducer til korte kilder
+        out = []
+        for i in n[:k]:
+            title = i.get("title") or "Nyhed"
+            url = i.get("link") or i.get("url") or ""
+            out.append(f"- {title} ({url})")
+        return "\n".join(out) if out else "Ingen relevante nyheder fundet."
+
+    prompt = f"""
+Du er en finansformidler der forklarer aktiebevægelser i helt almindeligt dansk, så en der ikke ved alt om aktier kan forstå det.
+Vær ærlig om usikkerhed. Giv 3–6 korte, konkrete grunde, og nævn kilder til sidst.
+
+Ticker: {ticker}
+Periode: {period_label}
+Udvikling: {ret_pct:+.2f}%
+Marked: {market_ret:+.2f}% hvis kendt, ellers 'ukendt'
+Sektor: {sector_name or 'ukendt'} {sector_ret:+.2f}% hvis kendt
+Volumen-signal: {'høj' if (volume_ratio and volume_ratio>1.8) else 'normal/ukendt'}
+Seneste nyheder:
+{pick(news_items, 6)}
+
+Skriv svaret sådan her:
+1) Én sætning TL;DR
+2) 3–6 punktopstillinger med mulige årsager (koblet til tal/nyheder – brug forsigtige ord som 'sandsynligvis', 'tyder på').
+3) “Kilder:” med de 3–6 nyhedstitler (som ovenfor).
+Undgå jargon; brug korte sætninger.
+"""
+    msg = [{"role": "user", "content": prompt}]
+    resp = client.chat.completions.create(model=model_name, messages=msg, temperature=0.3)
+    return resp.choices[0].message.content.strip()
