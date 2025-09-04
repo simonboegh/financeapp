@@ -190,6 +190,7 @@ if run_metrics:
 # ---- Forklaring på kurs ----
 if run_move:
     st.subheader("Dynamisk forklaring")
+
     bench_ret = fetch_benchmark_ret(bench_key)
     sector_ret = fetch_benchmark_ret(sector_etf) if sector_etf else None
 
@@ -199,12 +200,48 @@ if run_move:
         if len(v) > 20:
             vol_ratio = float(v.iloc[-1] / v.iloc[-20:].mean())
 
-    flags = news_flags_from_titles(news)
     ret_pct = float(hist_return_pct(hist))
-    lines = human_explain_price_move(range_choice, ret_pct, bench_ret, sector_ret, vol_ratio, flags)
-    for ln in lines:
-        st.write("• ", ln)
 
+    # --- Hvis OpenAI-nøgle findes: brug AI-forklaring ---
+    if "OPENAI_API_KEY" in st.secrets:
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+            model_name = st.secrets.get("OPENAI_MODEL", "gpt-4o-mini")
+
+            with st.spinner("Genererer forklaring med AI..."):
+                text = human_explain_price_move(
+                    range_choice, ret_pct, bench_ret, sector_ret, vol_ratio, news_flags_from_titles(news)
+                )  # fallback-tekst til safety
+                # Lav rigtig AI-forklaring (med kilder)
+                from modules.explain import ai_explain_price_move
+                ai_text = ai_explain_price_move(
+                    model_name=model_name,
+                    client=client,
+                    ticker=ticker,
+                    period_label=range_choice,
+                    ret_pct=ret_pct,
+                    market_ret=bench_ret,
+                    sector_name=info.get("sector"),
+                    sector_ret=sector_ret,
+                    volume_ratio=vol_ratio,
+                    news_items=news or [],
+                )
+                st.write(ai_text)
+        except Exception as e:
+            st.warning("AI-forklaring fejlede, viser simplere forklaring.")
+            from modules.explain import human_explain_price_move
+            flags = news_flags_from_titles(news)
+            for ln in human_explain_price_move(range_choice, ret_pct, bench_ret, sector_ret, vol_ratio, flags):
+                st.write("• ", ln)
+    else:
+        # --- Fallback: simpel forklaring ---
+        from modules.explain import human_explain_price_move, news_flags_from_titles
+        flags = news_flags_from_titles(news)
+        for ln in human_explain_price_move(range_choice, ret_pct, bench_ret, sector_ret, vol_ratio, flags):
+            st.write("• ", ln)
+
+    # Vis kilder separat også (klikbare)
     if news:
         st.caption("Kilder (seneste nyheder):")
         for n in news[:6]:
